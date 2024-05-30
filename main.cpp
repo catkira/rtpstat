@@ -114,6 +114,7 @@ int main(int argc, char* argv[])
     std::vector<uint8_t> buf;
     int recv_len = 0;
     bool print_packet_info = true;
+    bool wait_FU_end = false;
 
     Rtp_header rtp_header;
     Nal_header nal_header;
@@ -148,7 +149,18 @@ int main(int argc, char* argv[])
             }
 
             if (nal_header.payload_type == 49) {
+                if (nal_header.start_fu) {
+                    if (wait_FU_end) {
+                        logger->warn("unexpected start of FU received, end of FU is missing !");
+                    }
+                    wait_FU_end = true;
+                }
                 if (nal_header.stop_fu) {
+                    if (wait_FU_end) wait_FU_end = false;
+                    else {
+                        logger->warn("unexpected end of FU received !");
+                    }
+
                     if (nal_header.fu_type == 0) {
                         logger->info("TRAIL_N");
                         num_p_frames++;
@@ -160,6 +172,10 @@ int main(int argc, char* argv[])
                 }
             }
             else {
+                if (wait_FU_end) {
+                    logger->warn("end of FU is missing !");
+                }
+
                 if (nal_header.payload_type == 0) {
                     logger->info("TRAIL_N");
                         num_p_frames++;
