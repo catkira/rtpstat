@@ -17,7 +17,9 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(argparse)
 
 set(SOURCES
-    main.cpp 
+    main.cpp
+    rtp.cpp
+    h265.cpp
 )
 
 add_executable(${PROJECT_NAME} ${SOURCES})

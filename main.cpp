@@ -13,6 +13,9 @@
 #include "spdlog/spdlog.h"
 #include "spdlog/sinks/stdout_color_sinks.h"
 
+#include "rtp.h"
+#include "h265.h"
+
 std::shared_ptr<spdlog::logger> logger;
 std::atomic_bool abort_request = false;
 int sockfd = 0;
@@ -88,6 +91,7 @@ int main(int argc, char* argv[])
         auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
         console_sink->set_level(log_level);
         logger = std::make_shared<spdlog::logger>("main", console_sink);;
+        logger->set_level(log_level);
         spdlog::register_logger(logger);
     }
     catch (const spdlog::spdlog_ex& ex) {
@@ -107,22 +111,67 @@ int main(int argc, char* argv[])
     unsigned int num_p_frames = 0;
 
     constexpr static unsigned int BUFLEN = 2000;
-    char buf[BUFLEN];
+    std::vector<uint8_t> buf;
     int recv_len = 0;
     bool print_packet_info = true;
 
+    Rtp_header rtp_header;
+    Nal_header nal_header;
+
     const auto start_time = std::chrono::high_resolution_clock::now();
     auto last_console_print = std::chrono::high_resolution_clock::now();
+    auto frame_start = std::chrono::high_resolution_clock::now();
     while(!abort_request) {
-        recv_len = recvfrom(sockfd, buf, BUFLEN, MSG_WAITALL, (struct sockaddr *) &cli_addr, &clilen);
-        if (recv_len == -1 && !abort_request) {
-            logger->error("Error in recvfrom()!");
+        buf.resize(BUFLEN);
+        recv_len = recvfrom(sockfd, reinterpret_cast<char*>(&buf[0]), BUFLEN, MSG_WAITALL, (struct sockaddr *) &cli_addr, &clilen);
+        if (recv_len == -1) {
+            if (!abort_request)
+                logger->error("Error in recvfrom()!");
         }
         else {
-            if (print_packet_info)
-                logger->info("received {} bytes, preparing packet {}", recv_len, num_rtp_pkts);
+            buf.resize(recv_len);
+            parse_rtp(buf, rtp_header);
+            parse_nal(buf, nal_header);
+            if (nal_header.payload_type == 48)
+            {
+                logger->warn("aggregation packets are currently not supported!",
+                    nal_header.payload_type);
+            }
+
+            if (print_packet_info) {
+                logger->debug("{}: received {} byte packet, type = {}, sequence = {}, timestamp = {}, payload type = {}, layer = {}",
+                    num_rtp_pkts, recv_len, rtp_header.payload_type, rtp_header.sequence_number, rtp_header.timestamp,
+                    nal_header.payload_type, nal_header.layer_id);
+                if (nal_header.payload_type == 49) {
+                    logger->debug("fu_start = {}, fu_stop = {}, fu_type = {}", nal_header.start_fu, nal_header.stop_fu, nal_header.fu_type);
+                }
+            }
+
+            if (nal_header.payload_type == 49) {
+                if (nal_header.stop_fu) {
+                    if (nal_header.fu_type == 0) {
+                        logger->info("TRAIL_N");
+                        num_p_frames++;
+                    }
+                    else if (nal_header.fu_type == 0) {
+                        logger->info("TRAIL_R");
+                        num_i_frames++;
+                    }
+                }
+            }
+            else {
+                if (nal_header.payload_type == 0) {
+                    logger->info("TRAIL_N");
+                        num_p_frames++;
+                }
+                else if (nal_header.payload_type == 1) {
+                    logger->info("TRAIL_R");
+                    num_i_frames++;
+                }
+            }
             num_rtp_pkts++;
         }
+
 
         if (std::chrono::high_resolution_clock::now() - last_console_print > std::chrono::seconds(1)) {
             fmt::print("pkts = {}, I = {}, P = {}\n", num_rtp_pkts, num_i_frames, num_p_frames);
