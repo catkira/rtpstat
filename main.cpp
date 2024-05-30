@@ -1,6 +1,10 @@
 #include <memory>
 #include <atomic>
+
 #include "signal.h"
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #include "argparse/argparse.hpp"
 
@@ -9,17 +13,40 @@
 #include "spdlog/spdlog.h"
 #include "spdlog/sinks/stdout_color_sinks.h"
 
+std::shared_ptr<spdlog::logger> logger;
 std::atomic_bool abort_request = false;
+int sockfd = 0;
 
 void intHandler(int) {
     abort_request = true;
 }
 
+void open_socket() {
+    sockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (sockfd < 0) {
+        logger->error("ERROR opening socket");
+        return;
+    }
+    struct sockaddr_in serv_addr;
+    memset(&serv_addr, 0, sizeof(serv_addr));
+    unsigned int portno = 5600;
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_addr.s_addr = INADDR_ANY;
+    serv_addr.sin_port = htons(portno);
+
+    if (bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) {
+        logger->error("ERROR on binding");
+        return;
+    }
+}
+
+void close_socket() {
+
+}
+
 int main(int argc, char* argv[])
 {
     argparse::ArgumentParser program("rtpstat", "0.1.0", argparse::default_arguments::help);
-
-    std::shared_ptr<spdlog::logger> logger;
 
     program.add_argument("-p", "--port")
         .help("port of rtp stream")
@@ -71,19 +98,42 @@ int main(int argc, char* argv[])
     act.sa_handler = intHandler;
     sigaction(SIGINT, &act, NULL);
 
+    struct sockaddr_in cli_addr;
+    socklen_t clilen = sizeof(cli_addr);
+    open_socket();
+
     unsigned int num_rtp_pkts = 0;
     unsigned int num_i_frames = 0;
     unsigned int num_p_frames = 0;
 
+    constexpr static unsigned int BUFLEN = 2000;
+    char buf[BUFLEN];
+    int recv_len = 0;
+    bool print_packet_info = true;
+
     const auto start_time = std::chrono::high_resolution_clock::now();
+    auto last_console_print = std::chrono::high_resolution_clock::now();
     while(!abort_request) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        fmt::print("pkts = {}, I = {}, P = {}\n", num_rtp_pkts, num_i_frames, num_p_frames);
+        recv_len = recvfrom(sockfd, buf, BUFLEN, MSG_WAITALL, (struct sockaddr *) &cli_addr, &clilen);
+        if (recv_len == -1 && !abort_request) {
+            logger->error("Error in recvfrom()!");
+        }
+        else {
+            if (print_packet_info)
+                logger->info("received {} bytes, preparing packet {}", recv_len, num_rtp_pkts);
+            num_rtp_pkts++;
+        }
+
+        if (std::chrono::high_resolution_clock::now() - last_console_print > std::chrono::seconds(1)) {
+            fmt::print("pkts = {}, I = {}, P = {}\n", num_rtp_pkts, num_i_frames, num_p_frames);
+            last_console_print = std::chrono::high_resolution_clock::now();
+        }
     }
+    close_socket();
 
     const auto run_duration = std::chrono::system_clock ::now() - start_time;
     fmt::print("\nstats after {} s:\n", static_cast<float>(std::chrono::duration_cast<std::chrono::milliseconds>(run_duration).count()) / 1000);
-    fmt::print("pkts = {}, I = {}, P = {}\n", num_rtp_pkts, num_i_frames, num_p_frames);
+    fmt::print("rtp packets = {}, I-frames = {}, P-frames = {}\n", num_rtp_pkts, num_i_frames, num_p_frames);
     
     float i_duration_min = 0;
     float i_duration_max = 0;
