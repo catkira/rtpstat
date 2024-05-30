@@ -109,15 +109,19 @@ int main(int argc, char* argv[])
     unsigned int num_rtp_pkts = 0;
     unsigned int num_i_frames = 0;
     unsigned int num_p_frames = 0;
+    unsigned int num_b_frames = 0;
 
     constexpr static unsigned int BUFLEN = 2000;
     std::vector<uint8_t> buf;
     int recv_len = 0;
     bool print_packet_info = true;
     bool wait_FU_end = false;
+    bool frame_complete = false;
+    uint8_t frame_type = 0;
 
     Rtp_header rtp_header;
     Nal_header nal_header;
+    uint8_t payload_type;
 
     const auto start_time = std::chrono::high_resolution_clock::now();
     auto last_console_print = std::chrono::high_resolution_clock::now();
@@ -148,27 +152,27 @@ int main(int argc, char* argv[])
                 }
             }
 
+            if (nal_header.payload_type == 49) payload_type = nal_header.fu_type;
+            else                               payload_type = nal_header.payload_type;
+
             if (nal_header.payload_type == 49) {
                 if (nal_header.start_fu) {
                     if (wait_FU_end) {
                         logger->warn("unexpected start of FU received, end of FU is missing !");
                     }
                     wait_FU_end = true;
+                    frame_complete = false;
+                    get_frame_type(buf, nal_header, frame_type);
                 }
-                if (nal_header.stop_fu) {
+                else if (nal_header.stop_fu) {
                     if (wait_FU_end) wait_FU_end = false;
                     else {
                         logger->warn("unexpected end of FU received !");
                     }
-
-                    if (nal_header.fu_type == 0) {
-                        logger->info("TRAIL_N");
-                        num_p_frames++;
-                    }
-                    else if (nal_header.fu_type == 0) {
-                        logger->info("TRAIL_R");
-                        num_i_frames++;
-                    }
+                    frame_complete = true;
+                }
+                else {
+                    frame_complete = false;
                 }
             }
             else {
@@ -176,13 +180,37 @@ int main(int argc, char* argv[])
                     logger->warn("end of FU is missing !");
                 }
 
-                if (nal_header.payload_type == 0) {
-                    logger->info("TRAIL_N");
-                        num_p_frames++;
-                }
-                else if (nal_header.payload_type == 1) {
-                    logger->info("TRAIL_R");
+                frame_complete = true;
+                get_frame_type(buf, nal_header, frame_type);
+            }
+
+            if (frame_complete && payload_type) {
+                if ((payload_type == 21) && (((frame_type >> 2) & 0x07) == 3)) {
                     num_i_frames++;
+                    logger->debug("I");
+                }
+                else if ((payload_type == 1) && (((frame_type >> 3) & 0x07) == 2)) {
+                    num_p_frames++;
+                    logger->debug("P");
+                }
+                else if ((payload_type == 1) && (((frame_type >> 6) & 0x01) == 1)) {
+                    num_b_frames++;
+                    logger->debug("B");
+                }
+                else if (payload_type == 32) {
+
+                }
+                else if (payload_type == 33) {
+
+                }
+                else if (payload_type == 34) {
+
+                }
+                else if (payload_type == 39) {
+                    
+                }
+                else {
+                    logger->info("unknown type: payload type = {}, slice type = {:x}", payload_type, frame_type);
                 }
             }
             num_rtp_pkts++;
@@ -190,7 +218,7 @@ int main(int argc, char* argv[])
 
 
         if (std::chrono::high_resolution_clock::now() - last_console_print > std::chrono::seconds(1)) {
-            fmt::print("pkts = {}, I = {}, P = {}\n", num_rtp_pkts, num_i_frames, num_p_frames);
+            fmt::print("pkts = {}, I = {}, P = {}, B = {}\n", num_rtp_pkts, num_i_frames, num_p_frames, num_b_frames);
             last_console_print = std::chrono::high_resolution_clock::now();
         }
     }
@@ -198,7 +226,7 @@ int main(int argc, char* argv[])
 
     const auto run_duration = std::chrono::system_clock ::now() - start_time;
     fmt::print("\nstats after {} s:\n", static_cast<float>(std::chrono::duration_cast<std::chrono::milliseconds>(run_duration).count()) / 1000);
-    fmt::print("rtp packets = {}, I-frames = {}, P-frames = {}\n", num_rtp_pkts, num_i_frames, num_p_frames);
+    fmt::print("rtp packets = {}, I-frames = {}, P-frames = {}, B-frames = {}\n", num_rtp_pkts, num_i_frames, num_p_frames, num_b_frames);
     
     float i_duration_min = 0;
     float i_duration_max = 0;

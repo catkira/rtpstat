@@ -12,4 +12,6 @@ struct Nal_header {
     uint8_t fu_type;
 };
 
-void parse_nal(std::vector<uint8_t> buf, Nal_header& h265_header);
+void parse_nal(const std::vector<uint8_t> buf, Nal_header& h265_header);
+
+void get_frame_type(const std::vector<uint8_t> buf, const Nal_header& h265_header, uint8_t& frame_type);
