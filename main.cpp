@@ -71,14 +71,32 @@ int main(int argc, char* argv[])
     act.sa_handler = intHandler;
     sigaction(SIGINT, &act, NULL);
 
+    unsigned int num_rtp_pkts = 0;
+    unsigned int num_i_frames = 0;
+    unsigned int num_p_frames = 0;
+
     const auto start_time = std::chrono::high_resolution_clock::now();
     while(!abort_request) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        fmt::print(".\n");
+        fmt::print("pkts = {}, I = {}, P = {}\n", num_rtp_pkts, num_i_frames, num_p_frames);
     }
 
     const auto run_duration = std::chrono::system_clock ::now() - start_time;
     fmt::print("\nstats after {} s:\n", static_cast<float>(std::chrono::duration_cast<std::chrono::milliseconds>(run_duration).count()) / 1000);
+    fmt::print("pkts = {}, I = {}, P = {}\n", num_rtp_pkts, num_i_frames, num_p_frames);
+    
+    float i_duration_min = 0;
+    float i_duration_max = 0;
+    float i_duration_avg = 0;
+    float p_duration_min = 0;
+    float p_duration_max = 0;
+    float p_duration_avg = 0;
+    float ip_interval_min = 0;
+    float ip_interval_max = 0;
+    float ip_interval_avg = 0;
+    fmt::print("I duration: avg = {}, min = {}, max = {}\n", i_duration_avg, i_duration_min, i_duration_max);
+    fmt::print("P duration: avg = {}, min = {}, max = {}\n", p_duration_avg, p_duration_min, p_duration_max);
+    fmt::print("I-P interval: avg = {}, min = {}, max = {}\n", ip_interval_avg, ip_interval_min, ip_interval_max);
 
     logger->info("done");
     return 0;
