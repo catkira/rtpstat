@@ -16,6 +16,12 @@
 #include "rtp.h"
 #include "h265.h"
 
+struct Frame_stat {
+    unsigned int avg_size;
+    unsigned int min_size;
+    unsigned int max_size;
+};
+
 std::shared_ptr<spdlog::logger> logger;
 std::atomic_bool abort_request = false;
 int sockfd = 0;
@@ -45,6 +51,18 @@ void open_socket() {
 
 void close_socket() {
 
+}
+
+void calc_stat(std::vector<uint32_t> frame_sizes, Frame_stat& stat) {
+    stat.min_size = 1e6;
+    stat.max_size = 0;
+    uint32_t sum = 0;
+    for (unsigned int n = 0; n < frame_sizes.size(); n++) {
+        sum += frame_sizes[n];
+        if (frame_sizes[n] < stat.min_size)     stat.min_size = frame_sizes[n];
+        if (frame_sizes[n] > stat.max_size)     stat.max_size = frame_sizes[n];
+    }
+    stat.avg_size = static_cast<float>(sum) / frame_sizes.size();
 }
 
 int main(int argc, char* argv[])
@@ -110,6 +128,8 @@ int main(int argc, char* argv[])
     unsigned int num_i_frames = 0;
     unsigned int num_p_frames = 0;
     unsigned int num_b_frames = 0;
+    std::vector<uint32_t> frame_sizes_i, frame_sizes_p, frame_sizes_b;
+    std::vector<uint32_t> frame_gap_io, frame_gap_oo;
 
     constexpr static unsigned int BUFLEN = 2000;
     std::vector<uint8_t> buf;
@@ -118,6 +138,8 @@ int main(int argc, char* argv[])
     bool wait_FU_end = false;
     bool frame_complete = false;
     uint8_t frame_type = 0;
+    bool last_frame_I = false;
+    uint32_t frame_size = 0;
 
     Rtp_header rtp_header;
     Nal_header nal_header;
@@ -125,7 +147,8 @@ int main(int argc, char* argv[])
 
     const auto start_time = std::chrono::high_resolution_clock::now();
     auto last_console_print = std::chrono::high_resolution_clock::now();
-    auto frame_start = std::chrono::high_resolution_clock::now();
+    auto gap_start = std::chrono::high_resolution_clock::now();
+    auto frame_gap = gap_start - std::chrono::high_resolution_clock::now();;
     while(!abort_request) {
         buf.resize(BUFLEN);
         recv_len = recvfrom(sockfd, reinterpret_cast<char*>(&buf[0]), BUFLEN, MSG_WAITALL, (struct sockaddr *) &cli_addr, &clilen);
@@ -162,6 +185,7 @@ int main(int argc, char* argv[])
                     }
                     wait_FU_end = true;
                     frame_complete = false;
+                    frame_size = buf.size() - 14;
                     get_frame_type(buf, nal_header, frame_type);
                 }
                 else if (nal_header.stop_fu) {
@@ -170,9 +194,11 @@ int main(int argc, char* argv[])
                         logger->warn("unexpected end of FU received !");
                     }
                     frame_complete = true;
+                    frame_size += buf.size() - 14;
                 }
                 else {
                     frame_complete = false;
+                    frame_size += buf.size() - 14;
                 }
             }
             else {
@@ -181,33 +207,45 @@ int main(int argc, char* argv[])
                 }
 
                 frame_complete = true;
+                frame_size = buf.size() - 13;
                 get_frame_type(buf, nal_header, frame_type);
             }
 
             if (frame_complete && payload_type) {
                 if ((payload_type == 21) && (((frame_type >> 2) & 0x07) == 3)) {
                     num_i_frames++;
-                    logger->debug("I");
+                    frame_sizes_i.push_back(frame_size);
+                    logger->debug("I frame with size {}", frame_size);
+                    last_frame_I = true;
+                    gap_start = std::chrono::high_resolution_clock::now();
                 }
                 else if ((payload_type == 1) && (((frame_type >> 3) & 0x07) == 2)) {
                     num_p_frames++;
-                    logger->debug("P");
+                    frame_sizes_p.push_back(frame_size);
+                    logger->debug("P frame with size {}", frame_size);
+                    frame_gap = std::chrono::high_resolution_clock::now() - gap_start;
+                    if (last_frame_I)  frame_gap_io.push_back(std::chrono::duration_cast<std::chrono::microseconds>(frame_gap).count());
+                    else               frame_gap_oo.push_back(std::chrono::duration_cast<std::chrono::microseconds>(frame_gap).count());
+                    gap_start = std::chrono::high_resolution_clock::now();
+                    last_frame_I = false;
                 }
                 else if ((payload_type == 1) && (((frame_type >> 6) & 0x01) == 1)) {
                     num_b_frames++;
-                    logger->debug("B");
+                    frame_sizes_b.push_back(frame_size);
+                    logger->debug("B frame with size {}", frame_size);
+                    frame_gap = std::chrono::high_resolution_clock::now() - gap_start;
+                    if (last_frame_I)  frame_gap_io.push_back(std::chrono::duration_cast<std::chrono::microseconds>(frame_gap).count());
+                    else               frame_gap_oo.push_back(std::chrono::duration_cast<std::chrono::microseconds>(frame_gap).count());
+                    gap_start = std::chrono::high_resolution_clock::now();
+                    last_frame_I = false;
                 }
                 else if (payload_type == 32) {
-
                 }
                 else if (payload_type == 33) {
-
                 }
                 else if (payload_type == 34) {
-
                 }
                 else if (payload_type == 39) {
-                    
                 }
                 else {
                     logger->info("unknown type: payload type = {}, slice type = {:x}", payload_type, frame_type);
@@ -218,7 +256,7 @@ int main(int argc, char* argv[])
 
 
         if (std::chrono::high_resolution_clock::now() - last_console_print > std::chrono::seconds(1)) {
-            fmt::print("pkts = {}, I = {}, P = {}, B = {}\n", num_rtp_pkts, num_i_frames, num_p_frames, num_b_frames);
+            fmt::print("pkts = {}, frames: I = {}, P = {}, B = {}\n", num_rtp_pkts, num_i_frames, num_p_frames, num_b_frames);
             last_console_print = std::chrono::high_resolution_clock::now();
         }
     }
@@ -226,20 +264,21 @@ int main(int argc, char* argv[])
 
     const auto run_duration = std::chrono::system_clock ::now() - start_time;
     fmt::print("\nstats after {} s:\n", static_cast<float>(std::chrono::duration_cast<std::chrono::milliseconds>(run_duration).count()) / 1000);
-    fmt::print("rtp packets = {}, I-frames = {}, P-frames = {}, B-frames = {}\n", num_rtp_pkts, num_i_frames, num_p_frames, num_b_frames);
+    fmt::print("rtp packets = {}, frames: I = {}, P = {}, B = {}\n", num_rtp_pkts, num_i_frames, num_p_frames, num_b_frames);
     
-    float i_duration_min = 0;
-    float i_duration_max = 0;
-    float i_duration_avg = 0;
-    float p_duration_min = 0;
-    float p_duration_max = 0;
-    float p_duration_avg = 0;
-    float ip_interval_min = 0;
-    float ip_interval_max = 0;
-    float ip_interval_avg = 0;
-    fmt::print("I duration: avg = {}, min = {}, max = {}\n", i_duration_avg, i_duration_min, i_duration_max);
-    fmt::print("P duration: avg = {}, min = {}, max = {}\n", p_duration_avg, p_duration_min, p_duration_max);
-    fmt::print("I-P interval: avg = {}, min = {}, max = {}\n", ip_interval_avg, ip_interval_min, ip_interval_max);
+    Frame_stat stat;
+
+    calc_stat(frame_sizes_i, stat);
+    fmt::print("I-frame size [bytes]: avg = {}, min = {}, max = {}\n", stat.avg_size, stat.min_size, stat.max_size);
+    calc_stat(frame_sizes_p, stat);
+    fmt::print("P-frame size [bytes]: avg = {}, min = {}, max = {}\n", stat.avg_size, stat.min_size, stat.max_size);
+    calc_stat(frame_sizes_b, stat);
+    fmt::print("B-frame size [bytes]: avg = {}, min = {}, max = {}\n", stat.avg_size, stat.min_size, stat.max_size);
+
+    calc_stat(frame_gap_io, stat);
+    fmt::print("Gap between I and other frames [us]    : avg = {}, min = {}, max = {}\n", stat.avg_size, stat.min_size, stat.max_size);
+    calc_stat(frame_gap_oo, stat);
+    fmt::print("Gap between non-I and non-I frames [us]: avg = {}, min = {}, max = {}\n", stat.avg_size, stat.min_size, stat.max_size);
 
     logger->info("done");
     return 0;
