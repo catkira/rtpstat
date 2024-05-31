@@ -129,7 +129,7 @@ int main(int argc, char* argv[])
     unsigned int num_p_frames = 0;
     unsigned int num_b_frames = 0;
     std::vector<uint32_t> frame_sizes_i, frame_sizes_p, frame_sizes_b;
-    std::vector<uint32_t> frame_gap_io, frame_gap_oo;
+    std::vector<uint32_t> frame_gap_io, frame_gap_oo, frame_gap_oi;
 
     constexpr static unsigned int BUFLEN = 2000;
     std::vector<uint8_t> buf;
@@ -218,6 +218,8 @@ int main(int argc, char* argv[])
                     frame_sizes_i.push_back(frame_size);
                     logger->debug("I frame with size {}", frame_size);
                     last_frame_I = true;
+                    frame_gap = std::chrono::high_resolution_clock::now() - gap_start;
+                    if (!last_frame_I)  frame_gap_oi.push_back(std::chrono::duration_cast<std::chrono::microseconds>(frame_gap).count());
                     gap_start = std::chrono::high_resolution_clock::now();
                 }
                 else if ((payload_type == 1) && (((frame_type >> 3) & 0x07) == 2)) {
@@ -276,8 +278,10 @@ int main(int argc, char* argv[])
     calc_stat(frame_sizes_b, stat);
     fmt::print("B-frame size [bytes]: avg = {}, min = {}, max = {}\n", stat.avg_size, stat.min_size, stat.max_size);
 
+    calc_stat(frame_gap_oi, stat);
+    fmt::print("Gap between other and I-frames [us]    : avg = {}, min = {}, max = {}\n", stat.avg_size, stat.min_size, stat.max_size);
     calc_stat(frame_gap_io, stat);
-    fmt::print("Gap between I and other frames [us]    : avg = {}, min = {}, max = {}\n", stat.avg_size, stat.min_size, stat.max_size);
+    fmt::print("Gap between I- and other frames [us]   : avg = {}, min = {}, max = {}\n", stat.avg_size, stat.min_size, stat.max_size);
     calc_stat(frame_gap_oo, stat);
     fmt::print("Gap between non-I and non-I frames [us]: avg = {}, min = {}, max = {}\n", stat.avg_size, stat.min_size, stat.max_size);
 
