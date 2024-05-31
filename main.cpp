@@ -217,10 +217,10 @@ int main(int argc, char* argv[])
                     num_i_frames++;
                     frame_sizes_i.push_back(frame_size);
                     logger->debug("I frame with size {}", frame_size);
-                    last_frame_I = true;
                     frame_gap = std::chrono::high_resolution_clock::now() - gap_start;
                     if (!last_frame_I)  frame_gap_oi.push_back(std::chrono::duration_cast<std::chrono::microseconds>(frame_gap).count());
                     gap_start = std::chrono::high_resolution_clock::now();
+                    last_frame_I = true;
                 }
                 else if ((payload_type == 1) && (((frame_type >> 3) & 0x07) == 2)) {
                     num_p_frames++;
