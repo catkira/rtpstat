@@ -212,8 +212,7 @@ int main(int argc, char* argv[])
             }
 
             if (frame_complete && payload_type) {
-                if (((payload_type == 21) && (((frame_type >> 2) & 0x07) == 3)) || 
-                    ((payload_type == 19) && (((frame_type >> 2) & 0x07) == 3))) {
+                if ((payload_type == 21 || payload_type == 19) && (((frame_type >> 2) & 0x07) == 3)) {
                     num_i_frames++;
                     frame_sizes_i.push_back(frame_size);
                     logger->debug("I frame with size {}", frame_size);
